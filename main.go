@@ -39,7 +39,8 @@ import (
 var (
 	requestRate    = flag.Float64("rate", 1.0, "Rate of HTTP requests")
 	duration       = flag.Duration("duration", 1 * time.Second, "Duration to send HTTP requests for")
-	connectTimeout = flag.Uint("connect-timeout", 1000, "Number of milliseconds to permit connection attempts before timing out.")
+	connectTimeout = flag.Uint("connect-timeout", 1000, "Initial connection timeout (in milliseconds)")
+	clientTimeout  = flag.Uint("client-timeout", 2000, "Overall HTTP request timeout (in milliseconds)")
 	startupDelay   = flag.Uint("startup-delay", uint(0), "Number of milliseconds to delay before starting the requests.")
 )
 
@@ -89,7 +90,7 @@ func main() {
 
 	// Initialize a byteCounter for overall connection activity
 	bc := &byteCounter{}
-	client := &http.Client{Transport: st}
+	client := &http.Client{Transport: st, Timeout: time.Duration(*clientTimeout) * time.Millisecond}
 
 	// WaitGroup for launched goroutines
 	wg := &sync.WaitGroup{}

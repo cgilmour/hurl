@@ -28,7 +28,6 @@ import (
 	"net/http"
 	"os"
 	"path"
-	"runtime"
 	"sync"
 	"time"
 
@@ -41,8 +40,6 @@ var (
 	requestRate    = flag.Float64("rate", 1.0, "Rate of HTTP requests")
 	duration       = flag.Duration("duration", 1 * time.Second, "Duration to send HTTP requests for")
 	connectTimeout = flag.Uint("connect-timeout", 1000, "Number of milliseconds to permit connection attempts before timing out.")
-	spinupPeriod   = flag.Uint("spinup-period", 500, "Duration to slowly spin up connections (avoiding initial spike).")
-	numWorkers     = flag.Uint("workers", uint(runtime.NumCPU()), "Number of worker goroutines for client connections.")
 	startupDelay   = flag.Uint("startup-delay", uint(0), "Number of milliseconds to delay before starting the requests.")
 )
 
@@ -53,7 +50,7 @@ const (
 
 func usage() {
 	_, cmd := path.Split(os.Args[0])
-	fmt.Fprintf(os.Stderr, "Usage: %s [-rate=n] [-duration=n] [-connect-timeout=n] [-spinup-period=n] [-workers=n] [-startup-delay=n] url [url...]\n", cmd)
+	fmt.Fprintf(os.Stderr, "Usage: %s [-rate=n] [-duration=n] [-connect-timeout=n] [-startup-delay=n] url [url...]\n", cmd)
 }
 
 func main() {
@@ -94,49 +91,8 @@ func main() {
 	bc := &byteCounter{}
 	client := &http.Client{Transport: st}
 
-	// WaitGroup and channel for worker goroutines
+	// WaitGroup for launched goroutines
 	wg := &sync.WaitGroup{}
-	ch := make(chan *session, int(*numWorkers))
-
-	// To avoid hammering endpoints immediately, the worker goroutines are delayed from starting by
-	// the spinupInterval multiplied by worker number.
-	spinupInterval := time.Duration(*spinupPeriod) * time.Millisecond / time.Duration(*numWorkers)
-	for i := 0; i < int(*numWorkers); i++ {
-		wg.Add(1)
-		go func(factor int) {
-			defer wg.Done()
-			delay := time.Duration(factor) * spinupInterval
-			for s := range ch {
-				if delay != 0 {
-					// Delay from starting on first request only.
-					time.Sleep(delay)
-					delay = 0
-				}
-				// Capture start timestamp for this session
-				s.initiated = time.Now()
-				s.connections = make([]*timedConnection, 0, len(urls))
-				// Send requests to each target URL.
-				for _, url := range urls {
-					req, err := http.NewRequest("GET", url, nil)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "Error creating request to '%s': %s\n", url, err)
-						continue
-					}
-					req.Close = true
-					req.Header.Set(headerRequestID, s.uuid)
-					resp, err := client.Do(req)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "Error execuing request to '%s': %s\n", url, err)
-						continue
-					}
-					io.Copy(ioutil.Discard, resp.Body)
-					resp.Body.Close()
-				}
-				// Capture end timestamp for this session
-				s.completed = time.Now()
-			}
-		}(i)
-	}
 
 	// Delay overall startup.
 	if *startupDelay > 0 {
@@ -148,11 +104,16 @@ func main() {
 	// Gives an indication of the amount of traffic that's occuring.
 	ticker := time.NewTicker(1 * time.Second) // 100 * time.Millisecond)
 	go func() {
-		for range ticker.C {
+		report := func() {
 			rp, tp, rb, tb := bc.Sample()
 			// TODO: Improve the accuracy of this. It's Write()'s and Read()'s, not Packets.
 			fmt.Fprintln(os.Stderr, "Packets sent:", tp, "received", rp, "Bytes sent:", tb, "bytes received:", rb)
 		}
+
+		for range ticker.C {
+			report()
+		}
+		report()
 	}()
 
 	// Set up traffic rate
@@ -180,14 +141,39 @@ func main() {
 		st.m[u] = s
 		st.mu.Unlock()
 		uuidList = append(uuidList, u)
-		ch <- s
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			// Capture start timestamp for this session
+			s.initiated = time.Now()
+			s.connections = make([]*timedConnection, 0, len(urls))
+			// Send requests to each target URL.
+			for _, url := range urls {
+				req, err := http.NewRequest("GET", url, nil)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error creating request to '%s': %s\n", url, err)
+					continue
+				}
+				req.Close = true
+				req.Header.Set(headerRequestID, s.uuid)
+				resp, err := client.Do(req)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error execuing request to '%s': %s\n", url, err)
+					continue
+				}
+				io.Copy(ioutil.Discard, resp.Body)
+				resp.Body.Close()
+			}
+			// Capture end timestamp for this session
+			s.completed = time.Now()
+		}()
+
 	}
-	// Close the channel when all work is submitted.
-	close(ch)
-	// Stop reporting information
-	ticker.Stop()
 	// Wait for goroutines to finish.
 	wg.Wait()
+	// Stop reporting information
+	ticker.Stop()
 
 	// Summary headers
 	// // fmt.Printf("Session\tStartTime")
@@ -246,7 +232,7 @@ type session struct {
 // newSession returns a session with our injected RoundTripper.
 func newSession(uuid string, bc *byteCounter) *session {
 	s := &session{uuid: uuid, bc: bc, generated: time.Now()}
-	s.rt = &http.Transport{Dial: s.Dial}
+	s.rt = &http.Transport{Dial: s.Dial, MaxIdleConnsPerHost: 0, DisableKeepAlives: true}
 	return s
 }
 

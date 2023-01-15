@@ -39,8 +39,8 @@ import (
 var (
 	requestRate    = flag.Float64("rate", 1.0, "Rate of HTTP requests")
 	duration       = flag.Duration("duration", 1*time.Second, "Duration to send HTTP requests for")
-	connectTimeout = flag.Uint("connect-timeout", 1000, "Initial connection timeout (in milliseconds)")
-	clientTimeout  = flag.Uint("client-timeout", 2000, "Overall HTTP request timeout (in milliseconds)")
+	connectTimeout = flag.Duration("connect-timeout", 1*time.Second, "Initial connection timeout")
+	clientTimeout  = flag.Duration("client-timeout", 2*time.Second, "Overall HTTP request timeout")
 	startupDelay   = flag.Uint("startup-delay", uint(0), "Number of milliseconds to delay before starting the requests.")
 )
 
@@ -90,7 +90,7 @@ func main() {
 
 	// Initialize a byteCounter for overall connection activity
 	bc := &byteCounter{}
-	client := &http.Client{Transport: st, Timeout: time.Duration(*clientTimeout) * time.Millisecond}
+	client := &http.Client{Transport: st, Timeout: *clientTimeout}
 
 	// WaitGroup for launched goroutines
 	wg := &sync.WaitGroup{}
@@ -240,7 +240,7 @@ func newSession(uuid string, bc *byteCounter) *session {
 // we provide a Dial method, collecting information around the real net.Dialer's Dial()
 func (s *session) Dial(network, addr string) (net.Conn, error) {
 	tc := &timedConnection{started: time.Now()}
-	conn, err := (&net.Dialer{Timeout: time.Duration(*connectTimeout) * time.Millisecond}).Dial(network, addr)
+	conn, err := (&net.Dialer{Timeout: *connectTimeout}).Dial(network, addr)
 	tc.established = time.Now()
 	tc.bc = s.bc
 	tc.Conn = conn

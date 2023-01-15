@@ -27,8 +27,9 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	_ "github.com/cgilmour/maxopen"
@@ -38,7 +39,7 @@ import (
 
 var (
 	requestRate    = flag.Float64("rate", 1.0, "Rate of HTTP requests")
-	duration       = flag.Duration("duration", 1*time.Second, "Duration to send HTTP requests for")
+	duration       = flag.Duration("duration", 0, "Duration to send HTTP requests for")
 	connectTimeout = flag.Duration("connect-timeout", 1*time.Second, "Initial connection timeout")
 	clientTimeout  = flag.Duration("client-timeout", 2*time.Second, "Overall HTTP request timeout")
 	startupDelay   = flag.Uint("startup-delay", uint(0), "Number of milliseconds to delay before starting the requests.")
@@ -49,14 +50,8 @@ const (
 	headerRequestID = "X-Request-ID"
 )
 
-func usage() {
-	_, cmd := path.Split(os.Args[0])
-	fmt.Fprintf(os.Stderr, "Usage: %s [-rate=n] [-duration=n] [-connect-timeout=n] [-startup-delay=n] url [url...]\n", cmd)
-}
-
 func main() {
 	// Set up usage function and parse command-line arguments
-	flag.Usage = usage
 	flag.Parse()
 
 	// Expect a list of URLs as remaining arguments
@@ -119,12 +114,26 @@ func main() {
 
 	// Set up traffic rate
 	limiter := rate.NewLimiter(rate.Limit(*requestRate), 1)
-	endTime := time.Now().Add(*duration + 1*time.Millisecond)
+
+	var ctx context.Context
+	var cleanupTimer context.CancelFunc
+	if *duration != 0 {
+		endTime := time.Now().Add(*duration + 1*time.Millisecond)
+		ctx, cleanupTimer = context.WithDeadline(context.Background(), endTime)
+	} else {
+		ctx = context.Background()
+	}
+
+	// Set up signal handlers
+	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer func() {
+		cancel()
+		if cleanupTimer != nil {
+			cleanupTimer()
+		}
+	}()
 
 	// Start submitting work to the queue.
-	ctx, cancel := context.WithDeadline(context.Background(), endTime)
-	defer cancel()
-
 	for {
 		err := limiter.Wait(ctx)
 		if err != nil {

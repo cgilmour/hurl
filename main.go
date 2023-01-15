@@ -31,14 +31,14 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/time/rate"
 	_ "github.com/cgilmour/maxopen"
 	"github.com/cgilmour/uuid"
+	"golang.org/x/time/rate"
 )
 
 var (
 	requestRate    = flag.Float64("rate", 1.0, "Rate of HTTP requests")
-	duration       = flag.Duration("duration", 1 * time.Second, "Duration to send HTTP requests for")
+	duration       = flag.Duration("duration", 1*time.Second, "Duration to send HTTP requests for")
 	connectTimeout = flag.Uint("connect-timeout", 1000, "Initial connection timeout (in milliseconds)")
 	clientTimeout  = flag.Uint("client-timeout", 2000, "Overall HTTP request timeout (in milliseconds)")
 	startupDelay   = flag.Uint("startup-delay", uint(0), "Number of milliseconds to delay before starting the requests.")
@@ -119,8 +119,7 @@ func main() {
 
 	// Set up traffic rate
 	limiter := rate.NewLimiter(rate.Limit(*requestRate), 1)
-	endTime := time.Now().Add(*duration + 1 * time.Millisecond)
-	fmt.Println(limiter.Limit(), limiter.Burst())
+	endTime := time.Now().Add(*duration + 1*time.Millisecond)
 
 	// Start submitting work to the queue.
 	ctx, cancel := context.WithDeadline(context.Background(), endTime)
@@ -177,44 +176,44 @@ func main() {
 	ticker.Stop()
 
 	// Summary headers
-	// // fmt.Printf("Session\tStartTime")
-	// // for i := range urls {
-	// // 	fmt.Printf("\tC%[1]dConnSetup\tC%[1]dReqSent\tC%[1]dRespStarted\tC%[1]dRespCompleted", i+1)
-	// // }
-	// // fmt.Printf("\tDuration\n")
+	fmt.Printf("Session\tStartTime")
+	for i := range urls {
+		fmt.Printf("\tC%[1]dConnSetup\tC%[1]dReqSent\tC%[1]dRespStarted\tC%[1]dRespCompleted", i+1)
+	}
+	fmt.Printf("\tDuration\n")
 
 	// Output the data collected for all the sessions.
 	// This should be redirected to a file for large numbers of requests.
-	// // for _, v := range uuidList {
-	// // 	s := st.m[v]
+	for _, v := range uuidList {
+		s := st.m[v]
 
-	// // 	fmt.Printf("%s\t%d", s.uuid, s.initiated.UnixNano())
-	// // 	for _, c := range s.connections {
-	// // 		connSetup := c.established.Sub(c.started)
-	// // 		if connSetup < 0 {
-	// // 			connSetup = 0
-	// // 		}
-	// // 		reqSent := c.firstWrite.ts.Sub(c.established)
-	// // 		if reqSent < 0 {
-	// // 			reqSent = 0
-	// // 		}
-	// // 		respStarted := c.firstRead.ts.Sub(c.established)
-	// // 		if respStarted < 0 {
-	// // 			respStarted = 0
-	// // 		}
-	// // 		respCompleted := c.closed.ts.Sub(c.established)
-	// // 		if respCompleted < 0 {
-	// // 			respCompleted = 0
-	// // 		}
-	// // 		fmt.Printf("\t%d\t%d\t%d\t%d", connSetup, reqSent, respStarted, respCompleted)
-	// // 	}
-	// // 	dur := s.completed.Sub(s.initiated)
-	// // 	if dur < 0 {
-	// // 		dur = 0
-	// // 	}
-	// // 	fmt.Printf("\t%d\n", dur)
+		fmt.Printf("%s\t%d", s.uuid, s.initiated.UnixNano())
+		for _, c := range s.connections {
+			connSetup := c.established.Sub(c.started)
+			if connSetup < 0 {
+				connSetup = 0
+			}
+			reqSent := c.firstWrite.ts.Sub(c.established)
+			if reqSent < 0 {
+				reqSent = 0
+			}
+			respStarted := c.firstRead.ts.Sub(c.established)
+			if respStarted < 0 {
+				respStarted = 0
+			}
+			respCompleted := c.closed.ts.Sub(c.established)
+			if respCompleted < 0 {
+				respCompleted = 0
+			}
+			fmt.Printf("\t%d\t%d\t%d\t%d", connSetup, reqSent, respStarted, respCompleted)
+		}
+		dur := s.completed.Sub(s.initiated)
+		if dur < 0 {
+			dur = 0
+		}
+		fmt.Printf("\t%d\n", dur)
 
-	// // }
+	}
 }
 
 // session represents a UUID, and a list of URLs that will be requested.

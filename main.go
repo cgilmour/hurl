@@ -168,7 +168,7 @@ func main() {
 				req.Header.Set(headerRequestID, s.uuid)
 				resp, err := client.Do(req)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error execuing request to '%s': %s\n", url, err)
+					fmt.Fprintf(os.Stderr, "Error executing request to '%s': %s\n", url, err)
 					continue
 				}
 				io.Copy(ioutil.Discard, resp.Body)

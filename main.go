@@ -27,20 +27,21 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
-	"golang.org/x/time/rate"
 	_ "github.com/cgilmour/maxopen"
 	"github.com/cgilmour/uuid"
+	"golang.org/x/time/rate"
 )
 
 var (
 	requestRate    = flag.Float64("rate", 1.0, "Rate of HTTP requests")
-	duration       = flag.Duration("duration", 1 * time.Second, "Duration to send HTTP requests for")
-	connectTimeout = flag.Uint("connect-timeout", 1000, "Initial connection timeout (in milliseconds)")
-	clientTimeout  = flag.Uint("client-timeout", 2000, "Overall HTTP request timeout (in milliseconds)")
+	duration       = flag.Duration("duration", 0, "Duration to send HTTP requests for")
+	connectTimeout = flag.Duration("connect-timeout", 1*time.Second, "Initial connection timeout")
+	clientTimeout  = flag.Duration("client-timeout", 2*time.Second, "Overall HTTP request timeout")
 	startupDelay   = flag.Uint("startup-delay", uint(0), "Number of milliseconds to delay before starting the requests.")
 )
 
@@ -49,14 +50,8 @@ const (
 	headerRequestID = "X-Request-ID"
 )
 
-func usage() {
-	_, cmd := path.Split(os.Args[0])
-	fmt.Fprintf(os.Stderr, "Usage: %s [-rate=n] [-duration=n] [-connect-timeout=n] [-startup-delay=n] url [url...]\n", cmd)
-}
-
 func main() {
 	// Set up usage function and parse command-line arguments
-	flag.Usage = usage
 	flag.Parse()
 
 	// Expect a list of URLs as remaining arguments
@@ -90,7 +85,7 @@ func main() {
 
 	// Initialize a byteCounter for overall connection activity
 	bc := &byteCounter{}
-	client := &http.Client{Transport: st, Timeout: time.Duration(*clientTimeout) * time.Millisecond}
+	client := &http.Client{Transport: st, Timeout: *clientTimeout}
 
 	// WaitGroup for launched goroutines
 	wg := &sync.WaitGroup{}
@@ -119,13 +114,26 @@ func main() {
 
 	// Set up traffic rate
 	limiter := rate.NewLimiter(rate.Limit(*requestRate), 1)
-	endTime := time.Now().Add(*duration + 1 * time.Millisecond)
-	fmt.Println(limiter.Limit(), limiter.Burst())
+
+	var ctx context.Context
+	var cleanupTimer context.CancelFunc
+	if *duration != 0 {
+		endTime := time.Now().Add(*duration + 1*time.Millisecond)
+		ctx, cleanupTimer = context.WithDeadline(context.Background(), endTime)
+	} else {
+		ctx = context.Background()
+	}
+
+	// Set up signal handlers
+	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer func() {
+		cancel()
+		if cleanupTimer != nil {
+			cleanupTimer()
+		}
+	}()
 
 	// Start submitting work to the queue.
-	ctx, cancel := context.WithDeadline(context.Background(), endTime)
-	defer cancel()
-
 	for {
 		err := limiter.Wait(ctx)
 		if err != nil {
@@ -160,7 +168,7 @@ func main() {
 				req.Header.Set(headerRequestID, s.uuid)
 				resp, err := client.Do(req)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error execuing request to '%s': %s\n", url, err)
+					fmt.Fprintf(os.Stderr, "Error executing request to '%s': %s\n", url, err)
 					continue
 				}
 				io.Copy(ioutil.Discard, resp.Body)
@@ -177,44 +185,44 @@ func main() {
 	ticker.Stop()
 
 	// Summary headers
-	// // fmt.Printf("Session\tStartTime")
-	// // for i := range urls {
-	// // 	fmt.Printf("\tC%[1]dConnSetup\tC%[1]dReqSent\tC%[1]dRespStarted\tC%[1]dRespCompleted", i+1)
-	// // }
-	// // fmt.Printf("\tDuration\n")
+	fmt.Printf("Session\tStartTime")
+	for i := range urls {
+		fmt.Printf("\tC%[1]dConnSetup\tC%[1]dReqSent\tC%[1]dRespStarted\tC%[1]dRespCompleted", i+1)
+	}
+	fmt.Printf("\tDuration\n")
 
 	// Output the data collected for all the sessions.
 	// This should be redirected to a file for large numbers of requests.
-	// // for _, v := range uuidList {
-	// // 	s := st.m[v]
+	for _, v := range uuidList {
+		s := st.m[v]
 
-	// // 	fmt.Printf("%s\t%d", s.uuid, s.initiated.UnixNano())
-	// // 	for _, c := range s.connections {
-	// // 		connSetup := c.established.Sub(c.started)
-	// // 		if connSetup < 0 {
-	// // 			connSetup = 0
-	// // 		}
-	// // 		reqSent := c.firstWrite.ts.Sub(c.established)
-	// // 		if reqSent < 0 {
-	// // 			reqSent = 0
-	// // 		}
-	// // 		respStarted := c.firstRead.ts.Sub(c.established)
-	// // 		if respStarted < 0 {
-	// // 			respStarted = 0
-	// // 		}
-	// // 		respCompleted := c.closed.ts.Sub(c.established)
-	// // 		if respCompleted < 0 {
-	// // 			respCompleted = 0
-	// // 		}
-	// // 		fmt.Printf("\t%d\t%d\t%d\t%d", connSetup, reqSent, respStarted, respCompleted)
-	// // 	}
-	// // 	dur := s.completed.Sub(s.initiated)
-	// // 	if dur < 0 {
-	// // 		dur = 0
-	// // 	}
-	// // 	fmt.Printf("\t%d\n", dur)
+		fmt.Printf("%s\t%d", s.uuid, s.initiated.UnixNano())
+		for _, c := range s.connections {
+			connSetup := c.established.Sub(c.started)
+			if connSetup < 0 {
+				connSetup = 0
+			}
+			reqSent := c.firstWrite.ts.Sub(c.established)
+			if reqSent < 0 {
+				reqSent = 0
+			}
+			respStarted := c.firstRead.ts.Sub(c.established)
+			if respStarted < 0 {
+				respStarted = 0
+			}
+			respCompleted := c.closed.ts.Sub(c.established)
+			if respCompleted < 0 {
+				respCompleted = 0
+			}
+			fmt.Printf("\t%d\t%d\t%d\t%d", connSetup, reqSent, respStarted, respCompleted)
+		}
+		dur := s.completed.Sub(s.initiated)
+		if dur < 0 {
+			dur = 0
+		}
+		fmt.Printf("\t%d\n", dur)
 
-	// // }
+	}
 }
 
 // session represents a UUID, and a list of URLs that will be requested.
@@ -241,7 +249,7 @@ func newSession(uuid string, bc *byteCounter) *session {
 // we provide a Dial method, collecting information around the real net.Dialer's Dial()
 func (s *session) Dial(network, addr string) (net.Conn, error) {
 	tc := &timedConnection{started: time.Now()}
-	conn, err := (&net.Dialer{Timeout: time.Duration(*connectTimeout) * time.Millisecond}).Dial(network, addr)
+	conn, err := (&net.Dialer{Timeout: *connectTimeout}).Dial(network, addr)
 	tc.established = time.Now()
 	tc.bc = s.bc
 	tc.Conn = conn
